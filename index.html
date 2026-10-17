@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MedVerify</title>
+<style>
+ body{font-family:system-ui,sans-serif;background:#f4f7f6;margin:0;color:#1d2b2a}
+ main{max-width:720px;margin:auto;padding:20px}
+ h1{color:#0b6e5f} .card{background:#fff;border-radius:10px;padding:16px;margin:14px 0;box-shadow:0 1px 4px #0002}
+ input,button{padding:9px;margin:4px 0;width:100%;box-sizing:border-box;border:1px solid #bbb;border-radius:6px}
+ button{background:#0b6e5f;color:#fff;border:0;cursor:pointer} button:hover{background:#09554a}
+ #msg{padding:10px;border-radius:6px;display:none} .ok{background:#d9f5e5}.err{background:#fde0e0}
+</style></head><body><main>
+<h1>MedVerify</h1><p>Medicine batch authenticity on Ethereum</p>
+<div class="card"><button id="connect">Connect MetaMask</button>
+ <div id="acct">Not connected</div><div id="info"></div></div>
+<div id="msg"></div>
+<div class="card"><h3>Verify a batch (anyone)</h3>
+ <input id="vId" placeholder="Batch ID"><button id="vBtn">Verify</button><div id="vOut"></div></div>
+<div class="card"><h3>Regulator: authorise manufacturer</h3>
+ <input id="mAddr" placeholder="0x manufacturer address"><button id="mBtn">Authorise</button></div>
+<div class="card"><h3>Manufacturer: register batch</h3>
+ <input id="bId" placeholder="Batch ID"><input id="bName" placeholder="Drug name">
+ <input id="bExp" type="date"><button id="bBtn">Register</button></div>
+<div class="card"><h3>Recall batch</h3>
+ <input id="rId" placeholder="Batch ID"><button id="rBtn">Recall</button></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+<script>
+// >>> Paste your deployed address here after deployment <<<
+const CONTRACT_ADDRESS = "0xYOUR_DEPLOYED_ADDRESS";
+const ABI = [
+ "function regulator() view returns (address)",
+ "function totalBatches() view returns (uint256)",
+ "function isManufacturer(address) view returns (bool)",
+ "function authoriseManufacturer(address)",
+ "function registerBatch(string,string,uint256)",
+ "function recallBatch(string)",
+ "function verifyBatch(string) view returns (uint8,string,address,uint256)"
+];
+let provider, signer, contract;
+const $ = id => document.getElementById(id);
+const STATUS = ["NOT FOUND - possible counterfeit","GENUINE","EXPIRED","RECALLED"];
+
+function show(text, ok){ const m=$("msg"); m.style.display="block"; m.className=ok?"ok":"err"; m.textContent=text; }
+function reason(e){ return e.reason || e.error?.message || e.data?.message || e.message; }
+
+async function run(label, fn){
+  try{ if(!contract) throw new Error("Connect MetaMask first");
+    show(label+": waiting for confirmation...", true);
+    const tx = await fn(); if(tx?.wait){ const r = await tx.wait(); show(label+" successful. Tx: "+r.transactionHash, true); }
+    refresh();
+  }catch(e){ show(label+" failed: "+reason(e), false); }
+}
+
+async function refresh(){
+  const [reg,total,isM] = await Promise.all([contract.regulator(), contract.totalBatches(), contract.isManufacturer(await signer.getAddress())]);
+  const me = await signer.getAddress();
+  $("info").innerHTML = `Regulator: ${reg}<br>Total batches: ${total}<br>Your role: ${me.toLowerCase()===reg.toLowerCase()?"Regulator":isM?"Manufacturer":"Public user"}`;
+}
+
+$("connect").onclick = async () => {
+  try{
+    if(!window.ethereum) throw new Error("MetaMask not installed");
+    provider = new ethers.providers.Web3Provider(window.ethereum);
+    await provider.send("eth_requestAccounts", []);
+    signer = provider.getSigner();
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    $("acct").textContent = "Connected: " + await signer.getAddress();
+    await refresh(); show("Wallet connected", true);
+  }catch(e){ show("Connection failed: "+reason(e), false); }
+};
+$("mBtn").onclick = () => run("Authorise", () => contract.authoriseManufacturer($("mAddr").value.trim()));
+$("bBtn").onclick = () => run("Register", () => {
+  const ts = Math.floor(new Date($("bExp").value).getTime()/1000) || 0;
+  return contract.registerBatch($("bId").value.trim(), $("bName").value.trim(), ts); });
+$("rBtn").onclick = () => run("Recall", () => contract.recallBatch($("rId").value.trim()));
+$("vBtn").onclick = async () => {
+  try{ if(!contract) throw new Error("Connect MetaMask first");
+    const [s,name,man,exp] = await contract.verifyBatch($("vId").value.trim());
+    $("vOut").innerHTML = `<b>${STATUS[s]}</b>` + (s==0?"":`<br>Drug: ${name}<br>Manufacturer: ${man}<br>Expiry: ${new Date(exp*1000).toDateString()}`);
+  }catch(e){ show("Verify failed: "+reason(e), false); }
+};
+</script></main></body></html>
